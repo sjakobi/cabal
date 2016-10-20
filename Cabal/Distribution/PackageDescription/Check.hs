@@ -51,7 +51,7 @@ import Distribution.Text
 import Language.Haskell.Extension
 
 import Control.Monad (mapM)
-import Data.List  (group)
+import Data.List  ((\\), group)
 import qualified System.Directory as System
          ( doesFileExist, doesDirectoryExist )
 import qualified Data.Map as Map
@@ -1653,11 +1653,13 @@ checkPackageContent ops pkg = do
   configureError  <- checkConfigureExists ops pkg
   localPathErrors <- checkLocalPathsExist ops pkg
   vcsLocation     <- checkMissingVcsInfo  ops pkg
+  unlistedReadmes <- checkDesirableExtraSrcFilesAreIncluded ops pkg
 
   return $ licenseErrors
         ++ catMaybes [cabalBomError, setupError, configureError]
         ++ localPathErrors
         ++ vcsLocation
+        ++ unlistedReadmes
 
 checkCabalFileBOM :: Monad m => CheckPackageContentOps m
                   -> m (Maybe PackageCheck)
@@ -1792,6 +1794,35 @@ repoTypeDirname GnuArch    = [".arch-params"]
 repoTypeDirname Bazaar     = [".bzr"]
 repoTypeDirname Monotone   = ["_MTN"]
 repoTypeDirname _          = []
+
+checkDesirableExtraSrcFilesAreIncluded :: Monad m => CheckPackageContentOps m
+                                       -> PackageDescription
+                                       -> m [PackageCheck]
+checkDesirableExtraSrcFilesAreIncluded ops pkg = do
+    let dir = "."
+    rootContents <- getDirectoryContents ops dir
+    desirable <- filterM (doesFileExist ops)
+                         [ dir </> file
+                         | file <- rootContents
+                         , isDesirableExtraSrcFile file
+                         ]
+    -- Doesn't work with Glob syntax
+    let unlisted = desirable \\ extraSrcFiles pkg
+    return [ PackageDistSuspiciousWarn $
+                 "Please consider including " ++ f ++
+                 " in the extra-source-files section of the .cabal file " ++
+                 "if it contains useful information for users of the package."
+           | f <- unlisted ]
+
+isDesirableExtraSrcFile :: FilePath -> Bool
+isDesirableExtraSrcFile fp =
+    map toLower basename `elem` desirable
+  where
+    (basename, _ext) = splitExtension fp
+    desirable =
+        [ "readme"
+        , "changelog"
+        ]
 
 -- ------------------------------------------------------------
 -- * Checks involving files in the package
